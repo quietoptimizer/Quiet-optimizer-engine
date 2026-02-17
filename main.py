@@ -1,39 +1,44 @@
 import os
 import requests
 from flask import Flask, request
+import os, requests
 
 app = Flask(__name__)
 
-TELEGRAM_BOT_TOKEN = os.environ["TELEGRAM_BOT_TOKEN"]
-OPENAI_API_KEY = os.environ["OPENAI_API_KEY"]
+@app.route("/webhook", methods=["POST"])
+def webhook():
+    try:
+        update = request.get_json(silent=True) or {}
+        print("Incoming update:", update) # shows what Telegram sent
 
-TELEGRAM_API = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}"
+        message = update.get("message") or update.get("edited_message") or {}
+        chat = message.get("chat") or {}
+        chat_id = chat.get("id")
+        text = (message.get("text") or "").strip()
 
-SYSTEM_STYLE = """
-You are "The Quiet Optimizer" — anonymous, calm, strategic.
-Short lines. High signal. No fluff.
-Pillars: anime, gaming, psychology, strategy.
-"""
+        # If Telegram sends something that isn't a message, don't crash
+        if not chat_id or not text:
+            return "OK", 200
 
-def send_message(chat_id: int, text: str):
-    requests.post(
-        f"{TELEGRAM_API}/sendMessage",
-        json={"chat_id": chat_id, "text": text}
-    )
+        # simple command routing
+        if text.lower().startswith("/anime"):
+            reply = openai_generate("Give me 3 short anime-themed posts for The Quiet Optimizer.")
+        else:
+            reply = openai_generate(f"Reply briefly in the tone of The Quiet Optimizer to: {text}")
 
-def openai_generate(prompt: str) -> str:
-    r = requests.post(
-        "https://api.openai.com/v1/responses",
-        headers={
-            "Authorization": f"Bearer {OPENAI_API_KEY}",
-            "Content-Type": "application/json",
-        },
-        json={
-            "model": "gpt-5.2",
-            "input": [
-                {"role": "system", "content": SYSTEM_STYLE},
-                {"role": "user", "content": prompt},
-            ],
+        send_telegram(chat_id, reply)
+
+    except Exception as e:
+        print("Webhook error:", repr(e)) # IMPORTANT: shows the actual crash in logs
+
+    # Always return 200 so Telegram stops retrying
+    return "OK", 200
+
+def send_telegram(chat_id: int, text: str):
+    token = os.environ.get("TELEGRAM_BOT_TOKEN")
+    url = f"https://api.telegram.org/bot{token}/sendMessage"
+    r = requests.post(url, json={"chat_id": chat_id, "text": text}, timeout=20)
+    print("Telegram send status:", r.status_code, r.text[:200])
         },
         timeout=60,
     )
