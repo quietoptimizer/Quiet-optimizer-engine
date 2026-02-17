@@ -6,18 +6,20 @@ from flask import Flask, request
 
 app = Flask(__name__)
 
+# Required env vars in Render:
+# TELEGRAM_BOT_TOKEN = 1234567890:ABCDEF....
+# (OPENAI_API_KEY optional if you have billing)
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
-OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "").strip()
-OPENAI_MODEL = "gpt-4o-mini"
 
+# Simple per-chat throttle to avoid spam
 LAST_MESSAGE_AT = {}
-MIN_SECONDS_BETWEEN_MESSAGES = 3
+MIN_SECONDS_BETWEEN_MESSAGES = 2
 
 TEMPLATES = {
     "anime": [
-        "Train quietly. Win loudly.",
-        "Your rival is yesterday's you.",
-        "Discipline beats talent when talent is lazy."
+        "Quiet power: train one small skill today. No audience needed.",
+        "Your rival is yesterday's you. Beat them quietly.",
+        "If the arc feels slow, good. That is the training montage."
     ],
     "gaming": [
         "Optimize daily. Small upgrades matter.",
@@ -25,79 +27,108 @@ TEMPLATES = {
         "Stay calm. Make clean decisions."
     ],
     "psychology": [
-        "Name the emotion. Choose the action.",
-        "Confidence grows from repetition.",
-        "Protect your attention."
+        "Name the emotion, then choose the action. Feeling is not fate.",
+        "Confidence grows from repetition. Stack small wins.",
+        "Protect your attention. It is your real currency."
     ],
     "strategy": [
-        "Clarity before action.",
-        "Remove what does not serve the goal.",
-        "Consistency wins."
+        "Clarify the objective. Remove everything that does not serve it.",
+        "Good strategy is subtraction: fewer moves, sharper impact.",
+        "Win quietly: prepare more than you announce."
+    ],
+    "help": [
+        "Commands:\n"
+        "/anime\n"
+        "/gaming\n"
+        "/psychology\n"
+        "/strategy\n"
+        "/help\n"
+        "/mode"
     ]
 }
 
-def telegram_url(method):
+def telegram_api_url(method):
     return "https://api.telegram.org/bot" + TELEGRAM_BOT_TOKEN + "/" + method
 
 def send_message(chat_id, text):
     if not TELEGRAM_BOT_TOKEN:
+        print("ERROR: TELEGRAM_BOT_TOKEN is missing or empty")
         return
-    requests.post(telegram_url("sendMessage"), json={
-        "chat_id": chat_id,
-        "text": text
-    })
 
-def handle_text(text):
-    text = text.lower()
+    url = telegram_api_url("sendMessage")
+    payload = {"chat_id": chat_id, "text": text}
 
-    if text.startswith("/anime"):
-        return random.choice(TEMPLATES["anime"])
+    try:
+        r = requests.post(url, json=payload, timeout=20)
+        print("sendMessage status:", r.status_code)
+        print("sendMessage body:", r.text[:300])
+    except Exception as e:
+        print("sendMessage exception:", repr(e))
 
-    if text.startswith("/gaming"):
-        return random.choice(TEMPLATES["gaming"])
+def pick(pillar):
+    return random.choice(TEMPLATES.get(pillar, ["No templates available."]))
 
-    if text.startswith("/psychology"):
-        return random.choice(TEMPLATES["psychology"])
+def build_reply(text):
+    t = (text or "").strip().lower()
 
-    if text.startswith("/strategy"):
-        return random.choice(TEMPLATES["strategy"])
+    if t == "/start" or t.startswith("/help"):
+        return pick("help")
 
-    if text.startswith("/mode"):
-        if OPENAI_API_KEY:
-            return "AI mode enabled"
-        return "Template mode"
+    if t.startswith("/mode"):
+        if TELEGRAM_BOT_TOKEN:
+            return "Mode: template-only (OpenAI not required)."
+        return "Mode: missing TELEGRAM_BOT_TOKEN."
 
-    return "Use /anime /gaming /psychology /strategy"
+    if t.startswith("/anime"):
+        return pick("anime")
 
-@app.route("/", methods=["GET"])
+    if t.startswith("/gaming"):
+        return pick("gaming")
+
+    if t.startswith("/psychology"):
+        return pick("psychology")
+
+    if t.startswith("/strategy"):
+        return pick("strategy")
+
+    return "Use /anime /gaming /psychology /strategy or /help."
+
+@app.route("/", methods=["GET", "HEAD"])
 def home():
     return "Quiet Optimizer Online", 200
 
 @app.route("/webhook", methods=["POST"])
 def webhook():
+    # Always return 200 to Telegram, even if something goes wrong.
     try:
-        update = request.get_json() or {}
-        message = update.get("message", {})
-        chat_id = message.get("chat", {}).get("id")
-        text = message.get("text", "")
+        update = request.get_json(silent=True) or {}
+
+        message = update.get("message") or update.get("edited_message") or {}
+        chat = message.get("chat") or {}
+        chat_id = chat.get("id")
+        text = message.get("text") or ""
+
+        print("incoming chat_id:", chat_id)
+        print("incoming text:", repr(text)[:200])
 
         if not chat_id:
             return "OK", 200
 
+        # throttle
         now = int(time.time())
         last = LAST_MESSAGE_AT.get(chat_id, 0)
         if now - last < MIN_SECONDS_BETWEEN_MESSAGES:
             return "OK", 200
         LAST_MESSAGE_AT[chat_id] = now
 
-        reply = handle_text(text)
+        reply = build_reply(text)
         send_message(chat_id, reply)
 
     except Exception as e:
-        print("Error:", e)
+        print("webhook exception:", repr(e))
 
     return "OK", 200
 
 if __name__ == "__main__":
-    port = int(os.getenv("PORT", 10000))
+    port = int(os.getenv("PORT", "10000"))
     app.run(host="0.0.0.0", port=port)
