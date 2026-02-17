@@ -60,6 +60,39 @@ def home():
 @app.route("/webhook", methods=["POST"])
 def webhook():
     update = request.get_json()
+def openai_generate(prompt: str) -> str:
+    api_key = os.environ.get("OPENAI_API_KEY")
+    headers = {
+        "Authorization": f"Bearer {api_key}",
+        "Content-Type": "application/json"
+    }
+
+    payload = {
+        "model": "gpt-4o-mini",
+        "input": prompt
+    }
+
+    r = requests.post(
+        "https://api.openai.com/v1/responses",
+        headers=headers,
+        json=payload,
+        timeout=30
+    )
+
+    if r.status_code == 429:
+        print("Rate limited by OpenAI.")
+        return "System busy. Try again in 10 seconds."
+
+    if r.status_code >= 400:
+        print("OpenAI error:", r.status_code, r.text)
+        return "AI temporarily unavailable."
+
+    data = r.json()
+
+    try:
+        return data["output"][0]["content"][0]["text"]
+    except:
+        return "Formatting error."
     message = update.get("message")
 
     if not message:
